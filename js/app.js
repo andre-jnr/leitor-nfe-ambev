@@ -103,7 +103,10 @@ function extrairDadosXml(xmlTexto) {
 
   const ide = doc.getElementsByTagNameNS(NS, "ide")[0];
   const emit = doc.getElementsByTagNameNS(NS, "emit")[0];
+  const infNFe = doc.getElementsByTagNameNS(NS, "infNFe")[0];
+  const idNFe = infNFe ? (infNFe.getAttribute("Id") || "").replace(/^NFe/i, "") : "";
   const nf = {
+    chave: /^\d{44}$/.test(idNFe) ? idNFe : texto(doc.documentElement, "chNFe"),
     numero: texto(ide, "nNF"),
     serie: texto(ide, "serie"),
     emissao: texto(ide, "dhEmi") || texto(ide, "dEmi"),
@@ -276,45 +279,166 @@ async function processarArquivo(arquivo) {
 
 // ─── PDF ────────────────────────────────────────────────────────────────────
 
+const COR = {
+  tinta: [23, 24, 28],
+  suave: [107, 106, 102],
+  borda: [228, 225, 216],
+  fundo: [246, 245, 241],
+  zebra: [250, 249, 246],
+  ambar: [183, 121, 31],
+};
+
+function fmtChave(c) {
+  return c ? c.replace(/(\d{4})(?=\d)/g, "$1 ") : "—";
+}
+
 function gerarPdf() {
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation: "landscape", unit: "cm", format: "a4" });
-  const largura = doc.internal.pageSize.getWidth();
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const { nf, produtos } = estado;
+  const L = doc.internal.pageSize.getWidth();
+  const A = doc.internal.pageSize.getHeight();
+  const M = 14;
+  const util = L - M * 2;
 
+  // cabeçalho
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.text(`Preços Unitários — NF-e: ${estado.arquivo}`, largura / 2, 1.8, { align: "center" });
+  doc.setFontSize(7.5);
+  doc.setTextColor(...COR.ambar);
+  doc.setCharSpace(0.6);
+  doc.text("ENTRADA DE NOTAS AMBEV", M, 13);
+  doc.setCharSpace(0);
+
+  doc.setFontSize(20);
+  doc.setTextColor(...COR.tinta);
+  doc.text("Preços unitários", M, 21.5);
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(9);
-  doc.setTextColor(128);
-  doc.text("Frigorífico Amazonas", largura / 2, 2.4, { align: "center" });
+  doc.setTextColor(...COR.suave);
+  doc.text("Frigorífico Amazonas", L - M, 13, { align: "right" });
+  doc.text(`Gerado em ${new Date().toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}`, L - M, 18, { align: "right" });
+
+  // bloco com os dados da nota
+  const yBloco = 28;
+  const hBloco = 30;
+  doc.setFillColor(...COR.fundo);
+  doc.setDrawColor(...COR.borda);
+  doc.setLineWidth(0.2);
+  doc.roundedRect(M, yBloco, util, hBloco, 2.5, 2.5, "FD");
+
+  const campo = (rotulo, valor, x, y, { mono = false, tam = 10.5, max = 0 } = {}) => {
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(...COR.suave);
+    doc.setCharSpace(0.3);
+    doc.text(rotulo.toUpperCase(), x, y);
+    doc.setCharSpace(0);
+    doc.setFont(mono ? "courier" : "helvetica", "bold");
+    doc.setFontSize(tam);
+    doc.setTextColor(...COR.tinta);
+    let txt = String(valor || "—");
+    if (max) while (txt.length > 1 && doc.getTextWidth(txt) > max) txt = `${txt.slice(0, -2)}…`;
+    doc.text(txt, x, y + 5.2);
+  };
+
+  const pad = 6;
+  const x0 = M + pad;
+  const y1 = yBloco + 8;
+  campo("Número da NF", nf.numero, x0, y1, { tam: 13 });
+  campo("Série", nf.serie, x0 + 38, y1, { tam: 13 });
+  campo("Emissão", fmtData(nf.emissao), x0 + 60, y1);
+  const xCnpj = L - M - pad - 46;
+  campo("Razão social", nf.emitente, x0 + 95, y1, { max: xCnpj - (x0 + 95) - 6 });
+  campo("CNPJ", fmtCnpj(nf.cnpj), xCnpj, y1);
+
+  doc.setDrawColor(...COR.borda);
+  doc.line(x0, yBloco + 18, L - M - pad, yBloco + 18);
+  campo("Chave de acesso", fmtChave(nf.chave), x0, yBloco + 23.5, { mono: true, tam: 10 });
+
+  // resumo
+  const semQtde = produtos.filter((p) => !p.qtde).length;
+  const conferir = produtos.filter((p) => p.qtde && p.origem !== "cadastro").length;
+  const resumo = [`${produtos.length} produtos`];
+  if (conferir) resumo.push(`${conferir} com Qtde CX lida da descrição ou editada (*)`);
+  if (semQtde) resumo.push(`${semQtde} sem Qtde CX`);
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(...COR.suave);
+  doc.text(resumo.join("  ·  "), M, yBloco + hBloco + 7);
+
+  const rodape = [nf.numero ? `NF-e ${nf.numero}` : estado.arquivo, nf.serie && `Série ${nf.serie}`, nf.emitente]
+    .filter(Boolean)
+    .join("  ·  ");
 
   doc.autoTable({
-    startY: 3,
-    margin: { left: 1, right: 1, top: 1.5, bottom: 1.5 },
-    head: [["Cód. Produto", "Descrição", "Vlr Unit CX (R$)", "Qtde CX", "Vlr Unit UN (R$)"]],
-    body: estado.produtos.map((p) => [
+    startY: yBloco + hBloco + 11,
+    margin: { left: M, right: M, top: 16, bottom: 16 },
+    head: [["Código", "Descrição", "Vlr Unit CX", "Qtde CX", "Vlr Unit UN"]],
+    body: produtos.map((p) => [
       p.codigo ?? "—",
       p.descricao,
       fmtMoeda(p.precoCx),
-      p.qtde ?? "—",
+      p.qtde ? `${p.qtde}${p.origem !== "cadastro" ? " *" : ""}` : "—",
       fmtMoeda(p.vlrUn, brl2),
     ]),
-    theme: "grid",
-    styles: { fontSize: 8, cellPadding: 0.14, valign: "middle", lineColor: [204, 204, 204], lineWidth: 0.014, textColor: 20 },
-    headStyles: { fillColor: [26, 58, 92], textColor: 255, fontStyle: "bold", fontSize: 8.5, halign: "center" },
-    alternateRowStyles: { fillColor: [238, 243, 248] },
-    columnStyles: {
-      0: { cellWidth: 2.5, halign: "center" },
-      1: { cellWidth: 11, fontSize: 7.5 },
-      2: { cellWidth: 4, halign: "right" },
-      3: { cellWidth: 2.5, halign: "right" },
-      4: { cellWidth: 4, halign: "right" },
+    theme: "plain",
+    styles: {
+      font: "helvetica",
+      fontSize: 8.5,
+      textColor: COR.tinta,
+      cellPadding: { top: 2.1, bottom: 2.1, left: 3, right: 3 },
+      valign: "middle",
+      lineColor: COR.borda,
+      lineWidth: { bottom: 0.2 },
     },
-    tableWidth: 24,
-    horizontalPageBreak: false,
+    headStyles: {
+      fillColor: COR.tinta,
+      textColor: 255,
+      fontStyle: "bold",
+      fontSize: 7.5,
+      lineWidth: 0,
+    },
+    alternateRowStyles: { fillColor: COR.zebra },
+    columnStyles: {
+      0: { cellWidth: 24, font: "courier", fontSize: 8.5, textColor: COR.suave },
+      1: { cellWidth: "auto" },
+      2: { cellWidth: 34, halign: "right" },
+      3: { cellWidth: 22, halign: "right" },
+      4: { cellWidth: 34, halign: "right", fontStyle: "bold" },
+    },
+    didParseCell: (d) => {
+      if (d.section === "head" && d.column.index >= 2) d.cell.styles.halign = "right";
+    },
   });
+
+  if (conferir) {
+    let y = doc.lastAutoTable.finalY + 6;
+    if (y > A - 16) {
+      doc.addPage();
+      y = 16;
+    }
+    doc.setFont("helvetica", "italic");
+    doc.setFontSize(7.5);
+    doc.setTextColor(...COR.suave);
+    doc.text("* Qtde CX lida da descrição do produto ou editada manualmente — não consta no cadastro.", M, y);
+  }
+
+  // faixa e rodapé em todas as páginas, já sabendo o total
+  const total = doc.getNumberOfPages();
+  for (let i = 1; i <= total; i++) {
+    doc.setPage(i);
+    doc.setFillColor(...COR.ambar);
+    doc.rect(0, 0, L, 2.2, "F");
+    doc.setDrawColor(...COR.borda);
+    doc.setLineWidth(0.2);
+    doc.line(M, A - 11, L - M, A - 11);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(7.5);
+    doc.setTextColor(...COR.suave);
+    doc.text(rodape, M, A - 7);
+    doc.text(`Página ${i} de ${total}`, L - M, A - 7, { align: "right" });
+  }
 
   doc.save(`precos_${estado.arquivo}.pdf`);
 }
