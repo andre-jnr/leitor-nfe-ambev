@@ -32,12 +32,13 @@ function parsePrecoUnitario(texto) {
 }
 
 // padrões de quantidade na descrição, em ordem de confiança:
-// "SH C/12", "12X350ML", "CX12" / "PACK 6" / "FD 12", "12UN"
+// "SH C/12" / "C 8", "12X350ML", "CX12" / "PACK 6" / "FD 12", "12UN", "8 CX"
 const PADROES_QTDE = [
-  /\bC\s*\/\s*(\d+)\b/i,
+  /\bC(?:\s*\/\s*|\s+)(\d+)\b/i,
   /\b(\d+)\s*X\s*\d/i,
   /\b(?:CX|CAIXA|PACK|PCT|FD|FARDO)\s*(\d+)\b/i,
   /\b(\d+)\s*(?:UN|UND|UNID)\b/i,
+  /\b(\d+)\s*(?:CX|CAIXA)\b/i,
 ];
 
 /** Tenta descobrir a qtde por caixa pela descrição do produto. */
